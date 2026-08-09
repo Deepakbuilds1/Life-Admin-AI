@@ -57,15 +57,15 @@ export const Sidebar: React.FC<Props> = ({
   return (
     <>
       {/* Desktop Sidebar */}
-      <aside className="hidden md:flex flex-col w-64 border-r border-slate-200 bg-white sticky top-0 h-screen z-30 shrink-0">
+      <aside className="hidden md:flex flex-col w-64 border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 sticky top-0 h-screen z-30 shrink-0 transition-colors duration-200">
         {/* Brand Header */}
-        <div className="p-5 border-b border-slate-100 flex items-center space-x-3" onClick={() => setActiveTab('dashboard')}>
+        <div className="p-5 border-b border-slate-100 dark:border-slate-800 flex items-center space-x-3 cursor-pointer" onClick={() => setActiveTab('dashboard')}>
           <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white font-black text-base shadow-xs">
             L
           </div>
           <div>
-            <h1 className="font-bold text-lg text-slate-900 tracking-tight leading-tight">Life Admin AI</h1>
-            <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider block">
+            <h1 className="font-bold text-lg text-slate-900 dark:text-slate-100 tracking-tight leading-tight">Life Admin AI</h1>
+            <span className="text-[10px] font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider block">
               Personal Assistant
             </span>
           </div>
@@ -93,8 +93,8 @@ export const Sidebar: React.FC<Props> = ({
                 onClick={() => setActiveTab(item.id)}
                 className={`w-full flex items-center justify-between px-3 py-2 rounded-md font-medium text-sm transition ${
                   isActive
-                    ? 'bg-indigo-50 text-indigo-700 font-semibold'
-                    : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                    ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 font-semibold'
+                    : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-slate-100'
                 }`}
               >
                 <div className="flex items-center space-x-3">

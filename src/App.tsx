@@ -40,38 +40,12 @@ export default function App() {
   const [securityLogs, setSecurityLogs] = useState<SecurityActivityLog[]>(INITIAL_SECURITY_LOGS);
   const [memories, setMemories] = useState<AIMemory[]>(INITIAL_MEMORIES);
 
-  // Network, Sync & WebSocket State
+  // Network & Sync State
   const [isOnline, setIsOnline] = useState<boolean>(
     typeof window !== 'undefined' ? window.navigator.onLine : true
   );
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('local_only');
   const [wsStatus, setWsStatus] = useState<WebSocketConnectionStatus>('DISCONNECTED');
-
-  // WebSocket Real-time Sync Lifecycle & Event Handlers
-  useEffect(() => {
-    webSocketService.connect();
-
-    const unsubscribeStatus = webSocketService.onStatusChange((status) => {
-      setWsStatus(status);
-    });
-
-    const unsubscribeSync = webSocketService.subscribe('SYNC_UPDATE', (msg) => {
-      if (msg.payload) {
-        console.log('⚡ [WebSocket] Incoming real-time sync update:', msg.payload);
-        if (msg.payload.tasks) setTasks(msg.payload.tasks);
-        if (msg.payload.bills) setBills(msg.payload.bills);
-        if (msg.payload.documents) setDocuments(msg.payload.documents);
-        if (msg.payload.memories) setMemories(msg.payload.memories);
-        if (msg.payload.user) setUser((prev) => ({ ...prev, ...msg.payload.user }));
-        setSyncStatus('synced');
-      }
-    });
-
-    return () => {
-      unsubscribeStatus();
-      unsubscribeSync();
-    };
-  }, []);
 
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [searchQuery, setSearchQuery] = useState('');
@@ -174,14 +148,6 @@ export default function App() {
     setSyncStatus(syncRes.status);
     if (syncRes.status === 'synced' && syncRes.data) {
       setUser(syncRes.data.user);
-      // Broadcast real-time sync update over WebSocket to all peers
-      webSocketService.broadcastSync({
-        user: syncRes.data.user,
-        tasks,
-        bills,
-        documents,
-        memories,
-      });
     }
   };
 
@@ -248,7 +214,14 @@ export default function App() {
 
   // Firebase Auth State Listener & Cloud Sync
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
+    let cloudUnsubscribe: (() => void) | null = null;
+
+    const unsubscribeAuth = onAuthStateChanged(auth, async (fbUser) => {
+      if (cloudUnsubscribe) {
+        cloudUnsubscribe();
+        cloudUnsubscribe = null;
+      }
+
       if (fbUser) {
         // Base user details from Firebase
         setUser((prevUser) => {
@@ -279,6 +252,18 @@ export default function App() {
                 console.error('Failed cloud sync on login:', err);
                 setSyncStatus('sync_failed');
               });
+
+            // Subscribe to Firestore real-time updates
+            cloudUnsubscribe = cloudSyncService.subscribeToCloudSync(fbUser.uid, (data) => {
+              if (data) {
+                if (data.tasks) setTasks(data.tasks);
+                if (data.bills) setBills(data.bills);
+                if (data.documents) setDocuments(data.documents);
+                if (data.memories) setMemories(data.memories);
+                if (data.user) setUser((prev) => ({ ...prev, ...data.user }));
+                setSyncStatus('synced');
+              }
+            });
           } else {
             setSyncStatus('local_only');
           }
@@ -287,7 +272,11 @@ export default function App() {
         });
       }
     });
-    return () => unsubscribe();
+
+    return () => {
+      unsubscribeAuth();
+      if (cloudUnsubscribe) cloudUnsubscribe();
+    };
   }, []);
 
   // Show authentication reminder popup after 2-3 minutes (120 seconds) if unauthenticated or guest
@@ -504,7 +493,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC] text-slate-900 flex flex-col antialiased font-sans relative">
+    <div className="min-h-screen bg-[#F8FAFC] dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col antialiased font-sans relative transition-colors duration-200">
       {/* Top Header */}
       <Header
         user={user}

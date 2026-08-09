@@ -1,4 +1,4 @@
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, onSnapshot } from 'firebase/firestore';
 import { db } from './firebase';
 import { UserProfile, TaskItem, BillItem, DocumentItem, AIMemory, SyncStatus } from '../types';
 
@@ -206,6 +206,34 @@ export const cloudSyncService = {
         status: 'sync_failed',
         error: error.message || 'Cloud sync failed',
       };
+    }
+  },
+
+  /**
+   * Subscribe to real-time cloud changes via Firestore onSnapshot
+   */
+  subscribeToCloudSync(
+    uid: string,
+    onUpdate: (data: CloudSyncPayload) => void
+  ): () => void {
+    if (!uid) return () => {};
+    try {
+      const userRef = doc(db, 'users', uid);
+      return onSnapshot(
+        userRef,
+        (snapshot) => {
+          if (snapshot.exists()) {
+            const data = snapshot.data() as CloudSyncPayload;
+            onUpdate(data);
+          }
+        },
+        (error) => {
+          console.warn('Firestore real-time sync status:', error.message);
+        }
+      );
+    } catch (e) {
+      console.warn('Could not attach Firestore real-time listener:', e);
+      return () => {};
     }
   },
 };

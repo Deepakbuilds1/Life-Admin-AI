@@ -1,0 +1,6 @@
+{
+  "name": "Life Admin AI",
+  "description": "Personal administrative assistant that converts bills, notices, forms, and documents into clear tasks, deadlines, checklists, and reminders.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

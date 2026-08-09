@@ -30,6 +30,7 @@ import { auth, onAuthStateChanged } from './services/firebase';
 import { cloudSyncService } from './services/cloudSync';
 import { webSocketService, WebSocketConnectionStatus } from './services/websocket';
 import { Lock, LogIn, UserPlus, X, ShieldCheck } from 'lucide-react';
+import { SpeedInsights } from '@vercel/speed-insights/react';
 
 export default function App() {
   // State
@@ -702,6 +703,9 @@ export default function App() {
           setIsReminderPrompt(false);
         }}
       />
+      
+      {/* Vercel Speed Insights */}
+      <SpeedInsights />
     </div>
   );
 }

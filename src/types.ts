@@ -181,4 +181,5 @@ export interface UserProfile {
   storageMode: 'device_only' | 'cloud_sync';
   cloudSyncEnabled: boolean;
   lastSyncedAt?: string;
+  isAuthenticated?: boolean;
 }

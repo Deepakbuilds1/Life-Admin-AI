@@ -1,5 +1,7 @@
 import express from 'express';
 import path from 'path';
+import http from 'http';
+import { WebSocketServer, WebSocket } from 'ws';
 import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
 import { createServer as createViteServer } from 'vite';
@@ -521,8 +523,127 @@ Respond strictly in JSON matching schema.`,
   }
 });
 
-// Start Express server + Vite middleware
+// Start Express server + Vite middleware + WebSocket server
 async function startServer() {
+  const httpServer = http.createServer(app);
+  const wss = new WebSocketServer({ noServer: true });
+
+  httpServer.on('upgrade', (request, socket, head) => {
+    try {
+      const url = new URL(request.url || '', `http://${request.headers.host || 'localhost'}`);
+      if (url.pathname === '/ws') {
+        wss.handleUpgrade(request, socket, head, (ws) => {
+          wss.emit('connection', ws, request);
+        });
+      } else {
+        socket.destroy();
+      }
+    } catch (_) {
+      socket.destroy();
+    }
+  });
+
+  interface ExtendedWebSocket extends WebSocket {
+    isAlive?: boolean;
+    id?: string;
+  }
+
+  wss.on('connection', (ws: ExtendedWebSocket) => {
+    ws.isAlive = true;
+    ws.id = 'client_' + Math.random().toString(36).substring(2, 9);
+
+    ws.on('pong', () => {
+      ws.isAlive = true;
+    });
+
+    ws.on('error', (_err) => {
+      // Suppress client socket errors on disconnect
+    });
+
+    // Send welcome
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(
+        JSON.stringify({
+          type: 'WELCOME',
+          clientId: ws.id,
+          timestamp: new Date().toISOString(),
+          activeConnections: wss.clients.size,
+        })
+      );
+    }
+
+    // Broadcast connected count to all clients
+    const presencePayload = JSON.stringify({
+      type: 'PRESENCE_UPDATE',
+      activeConnections: wss.clients.size,
+    });
+    wss.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(presencePayload);
+      }
+    });
+
+    ws.on('message', (messageRaw: any) => {
+      try {
+        const msg = JSON.parse(messageRaw.toString());
+
+        if (msg.type === 'PING') {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'PONG', timestamp: new Date().toISOString() }));
+          }
+          return;
+        }
+
+        if (msg.type === 'SYNC_UPDATE') {
+          // Broadcast real-time sync update to all other connected clients
+          const broadcastData = JSON.stringify({
+            type: 'SYNC_UPDATE',
+            senderId: ws.id,
+            payload: msg.payload,
+            timestamp: new Date().toISOString(),
+          });
+
+          wss.clients.forEach((client) => {
+            if (client !== ws && client.readyState === WebSocket.OPEN) {
+              client.send(broadcastData);
+            }
+          });
+        }
+      } catch (err) {
+        console.error('Error handling WS message:', err);
+      }
+    });
+
+    ws.on('close', () => {
+      const remainingPresence = JSON.stringify({
+        type: 'PRESENCE_UPDATE',
+        activeConnections: wss.clients.size,
+      });
+      wss.clients.forEach((client) => {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(remainingPresence);
+        }
+      });
+    });
+  });
+
+  // Heartbeat check interval
+  const pingInterval = setInterval(() => {
+    wss.clients.forEach((client: ExtendedWebSocket) => {
+      if (client.isAlive === false) {
+        return client.terminate();
+      }
+      client.isAlive = false;
+      try {
+        client.ping();
+      } catch (_) {}
+    });
+  }, 30000);
+
+  wss.on('close', () => {
+    clearInterval(pingInterval);
+  });
+
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -537,8 +658,8 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Life Admin AI full-stack server running on http://localhost:${PORT}`);
+  httpServer.listen(PORT, '0.0.0.0', () => {
+    console.log(`Life Admin AI full-stack server running with WebSockets on http://localhost:${PORT}`);
   });
 }
 

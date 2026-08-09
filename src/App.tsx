@@ -25,6 +25,10 @@ import { SettingsView } from './components/views/SettingsView';
 import { LandingView } from './components/views/LandingView';
 import { ExplainSimplyModal } from './components/modals/ExplainSimplyModal';
 import { SourceHighlightModal } from './components/modals/SourceHighlightModal';
+import { AuthModal } from './components/modals/AuthModal';
+import { auth, onAuthStateChanged } from './services/firebase';
+import { cloudSyncService } from './services/cloudSync';
+import { webSocketService, WebSocketConnectionStatus } from './services/websocket';
 import { Lock, LogIn, UserPlus, X, ShieldCheck } from 'lucide-react';
 
 export default function App() {
@@ -36,11 +40,38 @@ export default function App() {
   const [securityLogs, setSecurityLogs] = useState<SecurityActivityLog[]>(INITIAL_SECURITY_LOGS);
   const [memories, setMemories] = useState<AIMemory[]>(INITIAL_MEMORIES);
 
-  // Network & Sync State
+  // Network, Sync & WebSocket State
   const [isOnline, setIsOnline] = useState<boolean>(
     typeof window !== 'undefined' ? window.navigator.onLine : true
   );
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('local_only');
+  const [wsStatus, setWsStatus] = useState<WebSocketConnectionStatus>('DISCONNECTED');
+
+  // WebSocket Real-time Sync Lifecycle & Event Handlers
+  useEffect(() => {
+    webSocketService.connect();
+
+    const unsubscribeStatus = webSocketService.onStatusChange((status) => {
+      setWsStatus(status);
+    });
+
+    const unsubscribeSync = webSocketService.subscribe('SYNC_UPDATE', (msg) => {
+      if (msg.payload) {
+        console.log('⚡ [WebSocket] Incoming real-time sync update:', msg.payload);
+        if (msg.payload.tasks) setTasks(msg.payload.tasks);
+        if (msg.payload.bills) setBills(msg.payload.bills);
+        if (msg.payload.documents) setDocuments(msg.payload.documents);
+        if (msg.payload.memories) setMemories(msg.payload.memories);
+        if (msg.payload.user) setUser((prev) => ({ ...prev, ...msg.payload.user }));
+        setSyncStatus('synced');
+      }
+    });
+
+    return () => {
+      unsubscribeStatus();
+      unsubscribeSync();
+    };
+  }, []);
 
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [searchQuery, setSearchQuery] = useState('');
@@ -128,22 +159,30 @@ export default function App() {
   }, [securityLogs]);
 
   // Sync Handler
-  const handleTriggerSync = () => {
+  const handleTriggerSync = async () => {
     if (!isOnline) {
       setSyncStatus('sync_failed');
       return;
     }
-    if (!user.cloudSyncEnabled) {
+    if (user.storageMode === 'device_only' || !user.cloudSyncEnabled) {
       setSyncStatus('local_only');
       return;
     }
 
     setSyncStatus('syncing');
-    setTimeout(() => {
-      const nowFormatted = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      setUser((prev) => ({ ...prev, lastSyncedAt: `Today at ${nowFormatted}` }));
-      setSyncStatus('synced');
-    }, 1200);
+    const syncRes = await cloudSyncService.saveToCloud(user.id, user, tasks, bills, documents, memories);
+    setSyncStatus(syncRes.status);
+    if (syncRes.status === 'synced' && syncRes.data) {
+      setUser(syncRes.data.user);
+      // Broadcast real-time sync update over WebSocket to all peers
+      webSocketService.broadcastSync({
+        user: syncRes.data.user,
+        tasks,
+        bills,
+        documents,
+        memories,
+      });
+    }
   };
 
   // Restore/Import Handler
@@ -205,8 +244,63 @@ export default function App() {
   });
 
   const [authModalOpen, setAuthModalOpen] = useState(false);
-  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
-  const [authEmail, setAuthEmail] = useState('');
+  const [isReminderPrompt, setIsReminderPrompt] = useState(false);
+
+  // Firebase Auth State Listener & Cloud Sync
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
+      if (fbUser) {
+        // Base user details from Firebase
+        setUser((prevUser) => {
+          const updatedUser: UserProfile = {
+            ...prevUser,
+            id: fbUser.uid,
+            name: fbUser.displayName || fbUser.email?.split('@')[0] || prevUser.name || 'User',
+            email: fbUser.email || prevUser.email || '',
+            isAuthenticated: true,
+          };
+
+          // Synchronize with cloud asynchronously if cloud sync is enabled
+          if (updatedUser.storageMode !== 'device_only' && updatedUser.cloudSyncEnabled) {
+            setSyncStatus('syncing');
+            cloudSyncService
+              .syncOnAuthLogin(fbUser.uid, updatedUser, tasks, bills, documents, memories)
+              .then((res) => {
+                setSyncStatus(res.status);
+                if (res.status === 'synced' && res.data) {
+                  setUser(res.data.user);
+                  setTasks(res.data.tasks);
+                  setBills(res.data.bills);
+                  setDocuments(res.data.documents);
+                  setMemories(res.data.memories);
+                }
+              })
+              .catch((err) => {
+                console.error('Failed cloud sync on login:', err);
+                setSyncStatus('sync_failed');
+              });
+          } else {
+            setSyncStatus('local_only');
+          }
+
+          return updatedUser;
+        });
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Show authentication reminder popup after 2-3 minutes (120 seconds) if unauthenticated or guest
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (!user.isAuthenticated || user.name === 'Guest User') {
+        setIsReminderPrompt(true);
+        setAuthModalOpen(true);
+      }
+    }, 120000); // 2 minutes popup
+
+    return () => clearTimeout(timer);
+  }, [user.isAuthenticated, user.name]);
 
   // Calculations
   const pendingApprovalsCount = tasks.filter((t) => t.status === 'Pending Approval').length;
@@ -322,6 +416,32 @@ export default function App() {
     setMemories([]);
   };
 
+  const handleUpdateUser = (updatedProps: Partial<UserProfile>) => {
+    setUser((prev) => {
+      const newUser = { ...prev, ...updatedProps };
+      if (newUser.storageMode === 'device_only' || !newUser.cloudSyncEnabled) {
+        setSyncStatus('local_only');
+      } else if (
+        (prev.storageMode === 'device_only' && newUser.storageMode === 'cloud_sync') ||
+        (!prev.cloudSyncEnabled && newUser.cloudSyncEnabled)
+      ) {
+        // Toggled from Device Only -> Cloud Sync: trigger cloud sync immediately
+        if (isOnline && newUser.isAuthenticated) {
+          setSyncStatus('syncing');
+          cloudSyncService
+            .saveToCloud(newUser.id, newUser, tasks, bills, documents, memories)
+            .then((res) => {
+              setSyncStatus(res.status);
+              if (res.status === 'synced' && res.data) {
+                setUser(res.data.user);
+              }
+            });
+        }
+      }
+      return newUser;
+    });
+  };
+
   const handleResetAllData = () => {
     setTasks([]);
     setBills([]);
@@ -383,18 +503,6 @@ export default function App() {
     });
   };
 
-  const handleAuthSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setUser({
-      ...user,
-      name: authEmail.split('@')[0] || 'Ananya Sharma',
-      email: authEmail || 'ananya.s@example.com',
-      isAuthenticated: true,
-    });
-    setAuthModalOpen(false);
-    setActiveTab('dashboard');
-  };
-
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-slate-900 flex flex-col antialiased font-sans relative">
       {/* Top Header */}
@@ -406,6 +514,7 @@ export default function App() {
         bills={bills}
         isOnline={isOnline}
         syncStatus={syncStatus}
+        wsStatus={wsStatus}
         onOpenUpload={() => setActiveTab('upload')}
         setActiveTab={setActiveTab}
         onToggleLanguage={() => setLanguage((prev) => (prev === 'en' ? 'hi' : 'en'))}
@@ -436,6 +545,7 @@ export default function App() {
               tasks={tasks}
               bills={bills}
               documents={documents}
+              memories={memories}
               onCompleteTask={handleCompleteTask}
               onPayBill={handlePayBill}
               onOpenUpload={() => setActiveTab('upload')}
@@ -493,7 +603,7 @@ export default function App() {
           {activeTab === 'settings' && (
             <SettingsView
               user={user}
-              onUpdateUser={(upd) => setUser((prev) => ({ ...prev, ...upd }))}
+              onUpdateUser={handleUpdateUser}
               tasks={tasks}
               documents={documents}
               bills={bills}
@@ -593,89 +703,16 @@ export default function App() {
       />
 
       {/* Auth Modal */}
-      {authModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5">
-            <div className="flex items-start justify-between">
-              <div className="flex items-center space-x-2">
-                <div className="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center font-bold">
-                  <ShieldCheck className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="font-extrabold text-slate-900 dark:text-white text-base">
-                    {authMode === 'login' ? 'Sign In to Life Admin AI' : 'Create Your Vault'}
-                  </h3>
-                  <p className="text-xs text-slate-500">Strict server-side encrypted authentication</p>
-                </div>
-              </div>
-
-              <button
-                onClick={() => setAuthModalOpen(false)}
-                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleAuthSubmit} className="space-y-3">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Email Address
-                </label>
-                <input
-                  type="email"
-                  required
-                  value={authEmail}
-                  onChange={(e) => setAuthEmail(e.target.value)}
-                  placeholder="name@example.com"
-                  className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs sm:text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Password
-                </label>
-                <input
-                  type="password"
-                  required
-                  defaultValue="••••••••"
-                  className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs sm:text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                />
-              </div>
-
-              <button
-                type="submit"
-                className="w-full py-3 bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 font-bold text-xs sm:text-sm rounded-xl shadow-xs hover:bg-slate-800 dark:hover:bg-white transition"
-              >
-                {authMode === 'login' ? 'Sign In' : 'Register Account'}
-              </button>
-            </form>
-
-            <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex justify-between items-center text-xs">
-              <button
-                type="button"
-                onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')}
-                className="text-indigo-600 dark:text-indigo-400 font-semibold hover:underline"
-              >
-                {authMode === 'login' ? "Don't have an account? Register" : 'Already registered? Sign in'}
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setUser({ ...user, isAuthenticated: true });
-                  setAuthModalOpen(false);
-                  setActiveTab('dashboard');
-                }}
-                className="text-slate-500 font-bold hover:underline"
-              >
-                Quick Demo
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <AuthModal
+        isOpen={authModalOpen}
+        onClose={() => setAuthModalOpen(false)}
+        isReminderPrompt={isReminderPrompt}
+        onAuthSuccess={(userProfile) => {
+          setUser(userProfile);
+          setAuthModalOpen(false);
+          setIsReminderPrompt(false);
+        }}
+      />
     </div>
   );
 }

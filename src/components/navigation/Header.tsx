@@ -17,6 +17,7 @@ import {
   WifiOff
 } from 'lucide-react';
 import { UserProfile, DocumentItem, TaskItem, BillItem, SyncStatus } from '../../types';
+import { WebSocketConnectionStatus } from '../../services/websocket';
 
 interface Props {
   user: UserProfile;
@@ -26,6 +27,7 @@ interface Props {
   bills: BillItem[];
   isOnline?: boolean;
   syncStatus?: SyncStatus;
+  wsStatus?: WebSocketConnectionStatus;
   onOpenUpload: () => void;
   setActiveTab: (tab: string) => void;
   onToggleLanguage: () => void;
@@ -40,6 +42,7 @@ export const Header: React.FC<Props> = ({
   bills,
   isOnline = true,
   syncStatus = 'local_only',
+  wsStatus,
   onOpenUpload,
   setActiveTab,
   onToggleLanguage,
@@ -99,21 +102,26 @@ export const Header: React.FC<Props> = ({
 
       {/* Right Actions & User Profile */}
       <div className="flex items-center space-x-3 sm:space-x-4">
-        {/* Sync / Storage Status Badge */}
+        {/* Sync / Storage / Realtime Status Badge */}
         <button
           onClick={() => setActiveTab('settings')}
           className="hidden md:flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 transition text-[11px] font-bold text-slate-700"
-          title="Data Storage & Sync Settings"
+          title="Data Storage & Real-Time Sync Settings"
         >
           {!isOnline ? (
             <>
               <WifiOff className="w-3.5 h-3.5 text-amber-500" />
               <span>Offline Mode</span>
             </>
-          ) : syncStatus === 'synced' ? (
+          ) : wsStatus === 'CONNECTING' || wsStatus === 'RECONNECTING' ? (
+            <>
+              <RefreshCw className="w-3.5 h-3.5 text-amber-500 animate-spin" />
+              <span>⚡ Reconnecting...</span>
+            </>
+          ) : wsStatus === 'CONNECTED' && syncStatus === 'synced' ? (
             <>
               <Check className="w-3.5 h-3.5 text-emerald-600" />
-              <span>✅ Synced</span>
+              <span>⚡ Realtime Synced</span>
             </>
           ) : syncStatus === 'syncing' ? (
             <>

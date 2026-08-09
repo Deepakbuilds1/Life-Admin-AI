@@ -11,15 +11,17 @@ import {
   FileText
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { TaskItem, BillItem, DocumentItem, UserProfile } from '../../types';
+import { TaskItem, BillItem, DocumentItem, UserProfile, AIMemory } from '../../types';
 import { LifeAdminScoreWidget } from '../dashboard/LifeAdminScoreWidget';
 import { DailyBriefingWidget } from '../dashboard/DailyBriefingWidget';
+import { GlobalSearch } from '../dashboard/GlobalSearch';
 
 interface Props {
   user: UserProfile;
   tasks: TaskItem[];
   bills: BillItem[];
   documents: DocumentItem[];
+  memories?: AIMemory[];
   onCompleteTask: (taskId: string) => void;
   onPayBill: (billId: string) => void;
   onOpenUpload: () => void;
@@ -32,6 +34,7 @@ export const DashboardView: React.FC<Props> = ({
   tasks,
   bills,
   documents,
+  memories = [],
   onCompleteTask,
   onPayBill,
   onOpenUpload,
@@ -55,6 +58,17 @@ export const DashboardView: React.FC<Props> = ({
 
   return (
     <div className="space-y-6 pb-12">
+      {/* Top Unified Global Search Bar */}
+      <GlobalSearch
+        tasks={tasks}
+        bills={bills}
+        documents={documents}
+        memories={memories}
+        onCompleteTask={handleCompleteWithCelebration}
+        onPayBill={onPayBill}
+        setActiveTab={setActiveTab}
+      />
+
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Column (8 Cols) */}
         <div className="lg:col-span-8 flex flex-col gap-6">
